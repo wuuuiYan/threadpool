@@ -9,7 +9,8 @@ using namespace std;
 #include "threadpool.h"
 
 /*
-* 有些应用场景，希望能够获取线程执行任务的返回值
+* 有些应用场景，希望能够获取线程执行任务的返回值，该如何做？
+* 举例：1 + 2 + ... + 3000000000
 */
 
 using uLong = unsigned long long;
@@ -23,7 +24,7 @@ public:
 	// 如何设计run()函数的返回值，可以表示任意的类型?
 	// Java、Python：Object类型是其他所有类型的基类
 	// C++17标准：Any类型，可以接收任意的其他类型
-	Any run() //run()方法最终就在线程池分配的线程中执行
+	Any run() // run()方法最终就在线程池分配的线程中执行
 	{
 		std::cout << "tid: " << std::this_thread::get_id() << " begin!" << std::endl;
 		std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -36,7 +37,7 @@ public:
 
 		return sum;
 	}
-	// 用户可重写基类的虚函数，已实现自定义功能
+	// 用户可重写基类的虚函数，实现自定义功能
 
 private:
 	int begin_;

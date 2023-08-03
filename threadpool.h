@@ -119,7 +119,8 @@ private:
 	std::atomic_bool isValid_; // 表示任务提交是否成功，只有当任务提交成功时才可以接收返回值
 };
 
-// 任务抽象基类
+// 任务抽象基类，含有纯虚函数的类是抽象基类
+// 不能定义抽象基类的对象，但是可以定义抽象基类类型的指针，进而指向派生类的对象
 class Task
 {
 public:
@@ -147,15 +148,14 @@ enum class PoolMode
 class Thread
 {
 public:
-	using ThreadFunc = std::function<void(int)>; // 使用类型别名定义线程函数对象类型：返回类型为void，形参列表为空
+	using ThreadFunc = std::function<void(int)>; // 使用类型别名定义线程函数对象类型：返回类型为void，形参列表为int
 
-	// 线程构造
+	// 线程构造：接受线程函数对象，用于定义实例化的线程所执行的具体操作
 	Thread(ThreadFunc func);
-
 	// 线程析构
 	~Thread();
 	
-	// 线程启动
+	// 启动线程
 	void start();
 
 	// 为每个线程手动分配ID
@@ -182,7 +182,6 @@ private:
 * 
 */
 
-
 // 线程池类型
 class ThreadPool
 {
@@ -202,45 +201,45 @@ public:
 	void setThreadSizeThresHold(int threshold);
 	// 只有在线程池尚未启动时，才能设置上述三个状态参数，所以三个函数中都需要先进行判断
 
-	// 向线程池提交任务(生产者)
+	// 向线程池提交任务(生产者调用)
 	Result submitTask(std::shared_ptr<Task> sp);
 
-	// 开启线程池
+	// 启动线程池
 	void start(int initThreadSize = std::thread::hardware_concurrency());
 
-	// 禁止线程池拷贝构造或赋值操作
+	// 禁止线程池拷贝构造或拷贝赋值操作
 	ThreadPool(const ThreadPool&) = delete;
 	ThreadPool& operator=(const ThreadPool&) = delete;
 
 private:
-	// 线程函数
+	// 线程函数，为了能够访问互斥锁与条件变量，该函数定义在线程池类中
 	void threadFunc(int threadId);
 
 	// 检查线程池的运行状态
 	bool checkRunningState() const;
 
 private:
-	// 官方库中的类的成员变量都是加前下划线，成员函数名都是用下划线连接的全小写英文
-	// 因此自己DIY的库成员变量使用后下划线，成员函数名使用小驼峰命名法
+	// 官方库中类的成员变量都是加前下划线，成员函数名都是用下划线连接的全小写英文
+	// 为了进行区别，自己DIY的库成员变量使用后下划线，成员函数名使用小驼峰命名法
 
-	// std::vector<std::unique_ptr<Thread>> threads_; // 存储线程的容器，无需考虑线程安全问题
-	std::unordered_map<int, std::unique_ptr<Thread>> threads_; // 建立线程对象与线程ID之间的关联
+	// std::vector<std::unique_ptr<Thread>> threads_; // 存放线程的容器，无需考虑线程安全问题
+	std::unordered_map<int, std::unique_ptr<Thread>> threads_; // 存放线程对象的容器，同时建立了线程对象与线程ID之间的关联
 	size_t initThreadSize_; // 初始线程数量
 	std::atomic_int curThreadSize_; // 当前线程容器中的线程数量
 	// threads_.size()也能表示当前线程容器中的线程数量，但因为vector不是线程安全的，所以考虑另外设置一个原子类型的变量
 	int threadSizeThresHold_; // 线程容器中能存储的最大线程数量，因为不会修改，所以不限定原子操作
 	std::atomic_int idleThreadSize_; // 当前空闲线程的数量
 
-	std::queue<std::shared_ptr<Task>> taskQue_; // 存储任务的队列，需要考虑线程安全问题
+	std::queue<std::shared_ptr<Task>> taskQue_; // 存放任务的队列，需要考虑线程安全问题
 	// Q：为什么这里不存放裸指针，而存放了智能指针？
 	// A：因为在某些调用情况下可能传入的是一个匿名的Task对象，在传入操作语句结束后匿名对象将被销毁，此时如果使用裸指针，将会出现内存泄漏
-	std::atomic_uint taskSize_; // 任务数量，因为用户生产任务、线程消费任务都会修改此变量，所以必须保证原子操作
+	std::atomic_int taskSize_; // 任务数量，因为用户生产任务、线程消费任务都会修改此变量，所以必须保证原子操作
 	// taskQue_.size()也能表示当前任务队列中的任务数量，但因为queue不是线程安全的，所以考虑另外设置一个原子类型的变量
 	int taskQueMaxThresHold_; // 任务队列中的最大任务数量，因为不会修改，所以不限定原子操作
 
-	std::mutex taskQueMtx_; // 代表线程队列唯一使用权的互斥锁，保证任务队列的线程安全
-	std::condition_variable notFull_; // 表示任务队列不满的条件变量，用户可以向其中提交任务等待执行(生产者)
-	std::condition_variable notEmpty_; // 表示任务队里不空的条件变量，线程容器可以从中取任务执行(消费者)
+	std::mutex taskQueMtx_; // 代表任务队列唯一使用权的互斥锁，保证任务队列的线程安全
+	std::condition_variable notFull_; // 代表任务队列不满的条件变量，用户可以向其中提交任务等待执行(生产者)
+	std::condition_variable notEmpty_; // 代表任务队列不空的条件变量，线程可以从其中提取任务执行(消费者)
 	std::condition_variable exitCond_; // 等待线程资源全部回收
 
 	PoolMode poolMode_; // 当前线程池的工作模式，使用枚举类型定义

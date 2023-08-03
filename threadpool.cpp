@@ -4,15 +4,15 @@
 #include <thread>
 #include <iostream>
 
-const int TASK_MAX_THREAHOLD = INT32_MAX; //任务队列中可存储的最大任务数量
-const int THREAD_MAX_THREsHOLD = 1024; //线程容器中可存储的最大线程数量
-const int THREAD_MAX_IDLE_TIME = 60; //空闲线程最大等待时间，单位：秒
+const int TASK_MAX_THREAHOLD = INT32_MAX; // 任务队列中可存储的最大任务数量
+const int THREAD_MAX_THREsHOLD = 1024; // 线程容器中可存储的最大线程数量
+const int THREAD_MAX_IDLE_TIME = 60; // 空闲线程最大等待时间，单位：秒
 
 /////////////////  ThreadPool方法实现
 
 // 线程池构造，默认构造函数
 ThreadPool::ThreadPool()
-	: initThreadSize_(0)
+	: initThreadSize_(0) // 因为启动线程池时会设定初始值，所以这里统一设置为0
 	, curThreadSize_(0)
 	, threadSizeThresHold_(THREAD_MAX_THREsHOLD)
 	, idleThreadSize_(0)
@@ -28,7 +28,7 @@ ThreadPool::~ThreadPool()
 	isPoolRunning_ = false;
 
 	// 等待线程池中的所有线程返回，此时线程有两种状态：阻塞 & 运行
-	std::unique_lock<std::mutex> lock(taskQueMtx_); //绑定互斥锁的智能锁
+	std::unique_lock<std::mutex> lock(taskQueMtx_); // 绑定互斥锁的智能锁
 	notEmpty_.notify_all();
 	exitCond_.wait(lock, [&]()->bool{return threads_.size() == 0; });
 }
@@ -62,22 +62,24 @@ void ThreadPool::setThreadSizeThresHold(int threshold)
 Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
 {
 	// 获取锁，任务队列是临界区代码段，存在竟态条件
+	// 在unique_lock模板类的构造函数中，就会调用lock()成员函数对互斥锁taskQueMtx_进行加锁
+	// 必须使用unique_lock模板类，而不能使用lock_guard模板类，因为后者不存在lock()与unlock()成员函数
 	std::unique_lock<std::mutex> lock(taskQueMtx_);
 	
-	// 线程通信，等待任务队列不满
+	// 线程通信，等待任务队列不满。如果队列已满则需要限定等待时间，不能使得用户线程一直阻塞
 	// 用户提交任务，函数最长不能阻塞超过1s，否则判断任务提交失败，返回
 	/*while (taskQue_.size() == taskQueMaxThresHold_)
 	{
 		notFull_.wait(lock);
-		 1) 将线程状态由running改为waiting，2）解锁
+		// 1) 将线程状态由running改为waiting，2）暂时解锁taskQueMtx_
 	}*/
 	// notFull_.wait(lock, [&]() -> bool {return taskQue_.size() < taskQueMaxThresHold_; })
-	// 使用成员函数wait()的重载形式，等待直到条件变量接收到信号&互斥量解锁&可调用对象条件成立时才running
-	// 成员函数wait_for()，限制等待可调用对象成立的时间；成员函数wait_until()，限制等待时间，无可调用对象
+	// 使用成员函数wait()的重载形式：传入可调用对象，等待直到条件变量接收到信号&互斥量解锁&可调用对象条件成立时才running
+	// 成员函数wait_for()，限制等待可调用对象成立的时间，等待给定时间尺度；成员函数wait_until()，限制等待时间，直到某个绝对时刻，无可调用对象
 	if (!notFull_.wait_for(lock, std::chrono::seconds(1),
 		[&]() -> bool { return taskQue_.size() < (size_t)taskQueMaxThresHold_; }))
 	{
-		// 表示notFull_等待时间满，可调用对象条件依然不成立，提交任务失败
+		// 表示notFull_已等待完给定时间，可调用对象条件依然不成立，提交任务失败
 		std::cerr << "Task queue is full, submit task fail." << std::endl;
 		return Result(sp, false);
 		// return sp->getResult();
@@ -87,7 +89,7 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
 	taskQue_.emplace(sp);
 	taskSize_++;
 
-	// 因为新放入了任务，队列肯定不空。在notEmpty_上进行通知可以消费任务
+	// 因为新放入了任务，队列肯定不空，通过条件变量notEmpty_通知消费者(线程)可以消费任务
 	notEmpty_.notify_all();
 
 	// cached模式：需要根据任务数量&空闲线程数量&总线程数量判断是否需要创建新的线程对象(使用自定义线程库)
@@ -116,7 +118,7 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
 	// return sp->getResult();
 }
 
-// 开启线程池
+// 启动线程池
 void ThreadPool::start(int initThreadSize)
 {
 	// 设置线程池的运行状态
@@ -129,12 +131,14 @@ void ThreadPool::start(int initThreadSize)
 	// 创建线程对象
 	for (int i = 0; i < initThreadSize_; ++i)
 	{
-		// 创建Thread类型的对象时，把线程函数threadFunc传递给构造函数
+		// 创建Thread类型的对象时，把线程函数threadFunc()传递给Thread的构造函数，这样线程才能执行具体的线程函数
 		std::unique_ptr<Thread> ptr = std::make_unique<Thread>(std::bind(&ThreadPool::threadFunc, this, std::placeholders::_1));
-		// bind()函数将线程函数与this指针绑定创建线程对象，然后make_unique()函数创建指向该线程对象的智能指针
-		// make_unique()函数是在C++14标准中推出的，C++11标准中推出了make_shared()函数
-		// 智能指针unique_ptr的左值引用的拷贝构造与赋值被禁用，因此此处只能使用右值引用
-		// threads_.emplace_back(std::move(ptr)); 
+		// bind()函数是一个通用的函数适配器，它接受一个可调用对象，生成一个新的可调用对象来适应原对象的参数列表
+		// bind()函数生成一个可调用线程函数threadFunc()的匿名可调用对象，在调用threadFunc()时将(_1, this)作为实参
+		// 匿名可调用对象被传入Thread类的构造函数，实例化线程对象，然后make_unique()函数创建指向该线程对象的智能指针
+		// make_unique()函数是在C++14标准中推出的，C++11标准中只推出了make_shared()函数
+		// 智能指针unique_ptr的左值引用的拷贝构造与拷贝赋值被禁用，因此此处只能使用右值引用
+		// threads_.emplace_back(std::move(ptr)); // 使用标准库函数move()进行资源所有权的移动
 		int threadId = ptr->getId();
 		threads_.emplace(threadId, std::move(ptr));
 	}
@@ -142,34 +146,36 @@ void ThreadPool::start(int initThreadSize)
 	// 启动所有线程
 	for (int i = 0; i < initThreadSize_; ++i)
 	{
-		threads_[i]->start(); //需要执行线程函数
+		threads_[i]->start(); // 启动线程，需要执行具体的线程函数
 		// 即使是修改之后使用map容器，map本身也重载了operator[]
-		idleThreadSize_++; //记录空闲线程的数量
+		idleThreadSize_++; // 记录空闲线程的数量
 	}
 }
 
-// 线程函数：线程池的所有线程从任务队列中消费任务
-void ThreadPool::threadFunc(int threadId) //线程函数返回，相应的线程也就结束了！！！
+// 线程函数：线程池中的线程从任务队列中消费任务(消费者)
+void ThreadPool::threadFunc(int threadId) // 线程函数返回，相应的线程也就结束了！！！
 {
 	 // std::cout << "Begin with threadFunc tid: " << std::this_thread::get_id() << std::endl;
-
 	 // std::cout << "End with threadFunc tid: " << std::this_thread::get_id() << std::endl;
 
 	auto lastTime = std::chrono::high_resolution_clock().now();
 
 	// 所有任务必须执行完成，线程池才可以回收所有线程资源
-	for (; ; )//不断消费任务，所以是一个死循环
+	for (; ; ) // 不断消费任务，所以是一个死循环
 	{
 		std::shared_ptr<Task> task;
+
+		// 为了保证线程取得任务后就解锁，所以需要再开一个代码段，否则其他线程需要等待该线程执行完任务后才能获取锁
+		// 当代码段结束时，锁就会被unique_lock模板类的析构函数释放
 		{
 			// 获取锁，任务队列是临界区代码段，存在竟态条件
+			// 在unique_lock模板类的构造函数中，就会调用lock()成员函数对互斥锁taskQueMtx_进行加锁
+			// 必须使用unique_lock模板类，而不能使用lock_guard模板类，因为后者不存在lock()与unlock()成员函数
 			std::unique_lock<std::mutex> lock(taskQueMtx_);
 
 			std::cout << "tid: " << std::this_thread::get_id() << "尝试获取任务..." << std::endl;
-
 			
-			// 每一秒钟返回一次。如何区分超时返回与有任务待执行返回？？？
-			// 锁 + 双重判断
+			// Q：每一秒钟返回一次。如何区分超时返回与有任务待执行返回？A：锁 + 双重判断
 			while (taskQue_.size() == 0)
 			{
 				// 线程池要结束，回收线程资源
@@ -207,7 +213,7 @@ void ThreadPool::threadFunc(int threadId) //线程函数返回，相应的线程也就结束了！
 				}
 				else
 				{
-					// 线程通信，等待任务队列不空
+					// 多线程通信，同时等待任务队列不空。一旦发现不空，但只能有一个线程抢到锁
 					notEmpty_.wait(lock);
 				}
 				
@@ -227,26 +233,25 @@ void ThreadPool::threadFunc(int threadId) //线程函数返回，相应的线程也就结束了！
 			std::cout << "tid: " << std::this_thread::get_id() << "获取任务成功..." << std::endl;
 
 			// 如果队列不空，从队列中取出任务
-			task = taskQue_.front();
-			// std::shared_ptr<Task> task = taskQue_.front();
+			task = taskQue_.front(); // std::shared_ptr<Task> task = taskQue_.front();
 			taskQue_.pop();
 			taskSize_--;
 
-			// 如果依然有剩余任务，继续通知其他线程执行任务
+			// 如果队列中依然有剩余任务，继续通知其他线程执行任务
 			if (taskQue_.size() > 0)
 			{
 				notEmpty_.notify_all();
 			}
 
-			// 因为新消费了任务，队列肯定不满。在notFull_上进行通知可以生产任务
-			notFull_.notify_all();
-		} //从队列中取出任务在具体执行任务之前就应该解锁，否则如果当前任务比较耗时，则线程会发生阻塞
+			// 因为新消费了任务，队列肯定不满。在notFull_上进行通知可以用户提交/生产任务
+			notFull_.notify_all(); // 这里就能明显地感受到使用两个条件变量的好处
+		} // 从队列中取出任务之后就应该解锁，否则如果当前任务比较耗时，则线程会发生阻塞
 		
-		// 当前线程负责执行任务
+		// 当前线程负责执行任务，任务的执行不能包含在加锁的范围内，否则其他线程也不能消费任务
 		if (task != nullptr)
 		{
 			// 执行任务，把任务的返回值通过setVal方法给到Result
-			// task->run(); //继承与多态
+			// task->run(); //继承与多态，根据基类指针所指向的具体派生类对象，调用具体对象的重写成员函数
 			task->exec();
 		}
 
@@ -262,9 +267,10 @@ bool ThreadPool::checkRunningState() const
 
 /////////////////  Thread方法实现
 
-int Thread::generateId_ = 0; //静态成员变量在类外进行初始化
+int Thread::generateId_ = 0; // 静态成员变量必须在类外进行初始化
+// 初始化时不再使用关键字static，且可以被任意非static成员函数访问
 
-// 线程构造
+// 线程构造：接受线程函数对象，用于定义实例化的线程所执行的具体操作
 Thread::Thread(ThreadFunc func)
 	: func_(func)
 	, threadId_(generateId_++)
@@ -277,8 +283,8 @@ Thread::~Thread() {}
 void Thread::start()
 {
 	// 创建线程，执行由线程池指定的线程函数
-	std::thread t(func_, threadId_); //C++11标准，t是线程对象，func_是线程函数
-	t.detach(); //线程分离，主线程不等待子线程运行结束就结束
+	std::thread t(func_, threadId_); // C++11标准，t是线程对象，func_是线程函数
+	t.detach(); // 子线程与主线程分离，主线程不等待子线程运行完成就结束
 	// Linux中：pthread_detach()函数，将pthread_t设置成分离线程
 }
 
