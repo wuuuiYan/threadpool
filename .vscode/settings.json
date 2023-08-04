@@ -1,5 +1,14 @@
 {
     "cSpell.words": [
+        "chrono",
+        "Cond",
+        "ldconfig",
+        "libtdpool",
+        "lpthread",
+        "ltdpool",
+        "mylib",
+        "nullptr",
+        "threadpool",
         "Thres"
     ]
 }

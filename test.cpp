@@ -49,8 +49,10 @@ int main()
 {
 	{
 		ThreadPool pool;
+		pool.setMode(PoolMode::MODE_CACHED);
 		pool.start(2); //启动线程池
 
+		// 在Linux系统上，这些Result对象也是局部对象，要析构的!!!
 		Result res1 = pool.submitTask(std::make_shared<MyTask>(1, 100000000));
 		Result res2 = pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
 		pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
@@ -59,7 +61,7 @@ int main()
 
 		uLong sum1 = res1.get().cast_<uLong>();
 		std::cout << sum1 << std::endl;
-	}
+	} // 这里Result对象也要析构，在Visual Studio下，condition_variable类型的对象析构时会释放相应资源
 
 	std::wcout << "Main thread is over!" << std::endl;
 	getchar();

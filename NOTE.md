@@ -65,4 +65,161 @@
 - `ThreadPool`类中，既有线程数量上限阈值`threadSizeThresHold_`，防止面对大量突发任务时无限制地创建线程而把用户空间占满；又有任务数量上限阈值`taskQueMaxThresHold_`，防止某些任务执行比较耗时而阻塞用于提交任务，即任务过多时会提示用户任务提交失败。这两个变量都不需要修改，因此不需要限定原子操作
 - 右值引用、移动语义、智能指针、STL容器、互斥锁、条件变量、可变参函数模板
 
-### **:rocket: 项目中死锁问题复现，如何解决**
+### **:rocket: 项目中出现的问题有哪些，如何解决**
+
+- 在线程池析构时，需要考虑三种情况：正在等待获取任务的线程、正在执行任务的线程、已执行完任务但没有进入等待获取任务的线程，前两种情况比较好处理，对于第三种情况，无论是用户线程调用`ThreadPool`类的析构函数先抢到互斥锁，还是线程池中的线程先抢到互斥锁，都会导致死锁问题，即条件变量`exitCond_`或`notEmpty_`一直处于 waiting 状态
+- 当线程池`ThreadPool`类的对象析构时，需要等待任务全部执行完成再结束线程，因此线程函数`threadFunc()`中的`for`循环是一个死循环，当任务队列不空时就执行任务，当任务队列为空时，首先检测`isPoolRunning_`标志位，若为`false`，则说明线程池要结束，回收线程资源；若为`true`，则说明线程池不结束，继续等待任务队列不空，执行任务
+
+```C++
+// 线程池析构
+ThreadPool::~ThreadPool()
+{
+    isPoolRunning_ = false;
+
+    // 等待线程池中的所有线程返回，此时线程有两种状态：等待获取任务 & 正在执行任务中
+    std::unique_lock<std::mutex> lock(taskQueMtx_); // 绑定互斥锁的智能锁
+    notEmpty_.notify_all(); // waiting --> blocking
+    exitCond_.wait(lock, [&]()->bool{return threads_.size() == 0; });
+}
+
+// 线程函数：线程池中的线程从任务队列中消费任务(消费者)
+void ThreadPool::threadFunc(int threadId) // 线程函数返回，相应的线程也就结束了！！！
+{
+	 // std::cout << "Begin with threadFunc tid: " << std::this_thread::get_id() << std::endl;
+	 // std::cout << "End with threadFunc tid: " << std::this_thread::get_id() << std::endl;
+
+	auto lastTime = std::chrono::high_resolution_clock().now();
+
+	// 所有任务必须执行完成，线程池才可以回收所有线程资源
+    // 而不是线程池析构时就立刻回收所有线程资源，所以还是用for循环
+	// 当任务队列为空时才判断线程池是否析构
+	for (; ; ) // 不断消费任务，所以是一个死循环
+	{
+		std::shared_ptr<Task> task;
+
+		// 为了保证线程取得任务后就解锁，所以需要再开一个代码段，否则其他线程需要等待该线程执行完任务后才能获取锁
+		// 当代码段结束时，锁就会被unique_lock模板类的析构函数释放
+		{
+			// 获取锁，任务队列是临界区代码段，存在竟态条件
+			// 在unique_lock模板类的构造函数中，就会调用lock()成员函数对互斥锁taskQueMtx_进行加锁
+			// 必须使用unique_lock模板类，而不能使用lock_guard模板类，因为后者不存在lock()与unlock()成员函数
+			std::unique_lock<std::mutex> lock(taskQueMtx_);
+
+			std::cout << "tid: " << std::this_thread::get_id() << "尝试获取任务..." << std::endl;
+			
+			// Q：每一秒钟返回一次。如何区分超时返回与有任务待执行返回？A：锁 + 双重判断
+			// 只要有任务没有执行完成，就不会进入循环，必须等任务全部执行完才能回收线程资源
+			while (taskQue_.size() == 0)
+			{
+				// 线程池要结束，回收原来等待获取任务的线程资源
+				if (!isPoolRunning_)
+				{
+					// 线程池要结束，回收线程资源
+					threads_.erase(threadId); // 注意不要传入std::this_thread::get_id()
+					std::cout << "Thread: " << std::this_thread::get_id() << " exit!" << std::endl;
+					exitCond_.notify_all();
+					return; // 线程函数结束就是线程结束
+				}
+
+				// cached模式下，有可能已经创建了很多线程但空闲时间超过60s，在保证初始线程数量的基础上应该回收多余线程
+				// “很多”：超过initThreadSize_; “空闲时间”：当前时间 - 上次线程执行时间
+				if (poolMode_ == PoolMode::MODE_CACHED)
+				{
+					// 条件变量，超时返回。成员函数wait_for()返回值为timeout/no_timeout，前者表示超时，后者表示未超时
+					if (std::cv_status::timeout == notEmpty_.wait_for(lock, std::chrono::seconds(1)))
+					{
+						auto nowTime = std::chrono::high_resolution_clock().now();
+						auto dur = std::chrono::duration_cast<std::chrono::seconds>(nowTime - lastTime); // 作差只会得到周期数，还要转化为时间格式
+						if (dur.count() >= THREAD_MAX_IDLE_TIME
+							&& curThreadSize_ > initThreadSize_) // 在保证初始线程数量的基础上回收线程
+						{
+							// 回收当前线程：把线程对象从线程容器中删除，修改与线程数量相关的变量
+							// 如何把线程和线程ID对应起来，这里就要将存储线程的容器从vector改为unordered_map
+							threads_.erase(threadId); // 注意不要传入std::this_thread::get_id()
+							curThreadSize_--;
+							idleThreadSize_--;
+
+							std::cout << "Thread: " << std::this_thread::get_id() << " exit!" << std::endl;
+							return; // 线程函数返回，线程结束
+						}
+					}
+				}
+				else // Fixed模式，当任务队列为空时等待用户提交任务
+				{
+					// 多线程通信，同时等待任务队列不空。一旦发现不空，但只能有一个线程抢到锁
+					notEmpty_.wait(lock);
+				}
+				
+				// 线程池要结束，回收原来等待获取任务的线程资源
+				//if (!isPoolRunning_)
+				//{
+				//	threads_.erase(threadId); // 注意不要传入std::this_thread::get_id()
+
+				//	std::cout << "Thread: " << std::this_thread::get_id() << " exit!" << std::endl;
+				//	exitCond_.notify_all();
+				//	return; // 线程函数结束就是线程结束
+				//}
+			}
+
+			idleThreadSize_--; // 线程开始执行任务，空闲线程的数量减少
+
+			std::cout << "tid: " << std::this_thread::get_id() << "获取任务成功..." << std::endl;
+
+			// 如果队列不空，从队列中取出任务
+			task = taskQue_.front(); // std::shared_ptr<Task> task = taskQue_.front();
+			taskQue_.pop();
+			taskSize_--;
+
+			// 如果队列中依然有剩余任务，继续通知其他线程执行任务
+			if (taskQue_.size() > 0)
+			{
+				notEmpty_.notify_all();
+			}
+
+			// 因为新消费了任务，队列肯定不满。在notFull_上进行通知可以用户提交/生产任务
+			notFull_.notify_all(); // 这里就能明显地感受到使用两个条件变量的好处
+		} // 从队列中取出任务之后就应该解锁，否则如果当前任务比较耗时，则线程会发生阻塞
+		
+		// 当前线程负责执行任务，任务的执行不能包含在加锁的范围内，否则其他线程也不能消费任务
+		if (task != nullptr)
+		{
+			// 执行任务，把任务的返回值通过setVal方法给到Result
+			// task->run(); // 继承与多态，根据基类指针所指向的具体派生类对象，调用具体对象的重写成员函数
+			task->exec(); // 这里的设计相当于又多套一层
+		}
+
+		idleThreadSize_++; // 线程执行任务完成，空闲线程的数量又增加
+		lastTime = std::chrono::high_resolution_clock().now(); //更新线程执行完任务的时间
+	}
+
+	// 线程池要结束，回收原来正在实行任务中的线程资源
+	// threads_.erase(threadId);
+	// std::cout << "Thread: " << std::this_thread::get_id() << " exit!" << std::endl;
+	// exitCond_.notify_all();
+}
+```
+- 另外，当在Linux系统上编译成动态链接库时也会发生死锁问题，主要原因在于`g++`中对于`condition_variable`类的析构函数中并没有回收资源；因此需要在自定义`Semaphore`类中加入一个标识是否退出的原子类型布尔变量`isExit_`，一旦该变量为`true`，直接返回不再进行 waiting
+
+### **:rocket: Linux命令**
+
+- 编译链接：
+```C++
+g++ -fPIC -shared threadpool.cpp -o libtdpool.so -std=c++17
+mv threadpool.so /usr/local/lib/
+rm threadpool.cpp
+mv threadpool.h /usr/local/include/
+g++ test.cpp -std=c++17 -ltdpool -lpthread
+ls
+cd /etc/ld.so.conf/
+nano mylib.conf
+/usr/local/lib
+ldconfig
+```
+- 调试：
+```C++
+su root // 切换到root用户
+ps -u // 查看当前用户的进程与PID号
+gdb attach PID // 启动GDB调试
+info threads // 显示线程信息
+bt // 打印线程堆栈
+```

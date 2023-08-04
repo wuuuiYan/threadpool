@@ -72,13 +72,21 @@ class Semaphore
 {
 public:
 	// 构造函数
-	Semaphore(int limit = 0) : resLimit_(limit) {} // 可以在初始化时指定资源计数
+	Semaphore(int limit = 0) 
+		: resLimit_(limit)
+		, isExit_(false)
+		{} // 可以在初始化时指定资源计数
 	// 析构函数
-	~Semaphore() = default;
+	~Semaphore()
+	{
+		isExit_ = true;
+	}
 
 	// 获取一个信号量资源
 	void wait()
 	{
+		if (isExit_) // 资源已经销毁，不要继续等待
+			return;
 		std::unique_lock<std::mutex> lock(mtx_);
 		// 等待信号量有资源，没有资源的话会阻塞当前线程
 		cond_.wait(lock, [&]()->bool {return resLimit_ > 0; });
@@ -88,12 +96,17 @@ public:
 	// 增加一个信号量资源
 	void post()
 	{
+		if (isExit_) // 资源已经销毁，不要继续等待
+			return;
 		std::unique_lock<std::mutex> lock(mtx_);
 		resLimit_++;
+		// 在Linux系统上，condition_variable的析构函数什么也没做
+		// 导致这里状态已经失效，无故阻塞
 		cond_.notify_all();
 	}
 	// 可以在不同线程中获取资源或增加资源，这是与互斥锁的最本质区别
 private:
+	std::atomic_bool isExit_;
 	int resLimit_; // 资源计数，因为信号量可看作是资源计数无限制的互斥锁
 	std::mutex mtx_;
 	std::condition_variable cond_;
