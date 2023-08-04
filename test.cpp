@@ -22,7 +22,7 @@ public:
 		: begin_(begin)
 		, end_(end) {}
 	// 如何设计run()函数的返回值，可以表示任意的类型?
-	// Java、Python：Object类型是其他所有类型的基类
+	// Java、Python：Object类型是其他所有类类型的基类
 	// C++17标准：Any类型，可以接收任意的其他类型
 	Any run() // run()方法最终就在线程池分配的线程中执行
 	{
@@ -71,7 +71,7 @@ int main()
 		pool.start(4); //启动线程池
 
 
-		// 如何设计这里的Result机制？
+		// 如何设计这里的Result机制？要求：当线程函数没有执行完毕时，调用成员函数get()会发生阻塞
 		Result res1 = pool.submitTask(std::make_shared<MyTask>(1, 100000000));
 		Result res2 = pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
 		Result res3 = pool.submitTask(std::make_shared<MyTask>(200000001, 300000000));

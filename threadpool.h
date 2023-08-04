@@ -18,13 +18,14 @@ class Any
 public:
 	Any() = default;
 	~Any() = default;
-	Any(const Any&) = delete;
-	Any& operator=(const Any&) = delete;
-	// 因为成员变量智能指针类型unique_ptr禁止左值引用和拷贝构造，所以该类也禁止左值引用和拷贝构造
-	Any(Any&&) = default;
-	Any& operator=(Any&&) = default;
+	Any(const Any&) = delete; // 拷贝构造函数
+	Any& operator=(const Any&) = delete; // 拷贝赋值运算符
+	// 因为成员变量智能指针类型unique_ptr禁止左值引用和拷贝构造，所以该类也禁止拷贝构造和拷贝初始化
+	Any(Any&&) = default; // 移动构造函数
+	Any& operator=(Any&&) = default; // 移动赋值运算符
 
-	// 这个构造函数可以让Any类型接收任意其他类型而构造对象
+	// 只接受一个参数的构造函数是转换构造函数
+	// 转换构造函数使用函数模板，可以接收任意类型而构造Any类对象
 	template<typename T>
 	Any(T data) : base_(std::make_unique<Derive<T>>(data)) {}
 	// 基类指针指向派生类的对象
@@ -34,8 +35,8 @@ public:
 	T cast_()
 	{
 		// 从成员变量base_找到指向的Derive对象，从该对象中再取出它的成员变量data_
-		// 基类指针 -> 派生类指针 RTTI
-		Derive<T>* pd = dynamic_cast<Derive<T>*>(base_.get()); //成员函数get()获取智能指针所指向对象的裸指针
+		// 基类指针 -> 派生类指针(RTTI)：当基类的指针确实指向派生类的对象时才可以转换成功，转换失败时返回nullptr
+		Derive<T> *pd = dynamic_cast<Derive<T>*>(base_.get()); // 成员函数get()获取智能指针所指向对象的裸指针
 		if (pd == nullptr)
 		{
 			// 类型不匹配会转换失败
@@ -48,21 +49,21 @@ private:
 	class Base
 	{
 	public:
-		virtual ~Base() = default;
+		virtual ~Base() = default; // 基类的析构函数是虚函数
 	};
 
-	// 派生类类型
+	// 派生类类型，同时使用了类模板
 	template<typename T>
 	class Derive : public Base
 	{
 	public:
 		Derive(T data) : data_(data) {}
-		T data_; // 保存了任意的其他类型
+		T data_; // 使用类模板实现任意类型
 	};
 	// 实现类的嵌套
 
 private:
-	// 定义基类的指针，可以指向派生类的对象
+	// 委托设计思想：定义基类的指针，可以指向派生类的对象
 	std::unique_ptr<Base> base_;
 };
 
@@ -70,7 +71,9 @@ private:
 class Semaphore
 {
 public:
-	Semaphore(int limit = 0) : resLimit_(limit) {}
+	// 构造函数
+	Semaphore(int limit = 0) : resLimit_(limit) {} // 可以在初始化时指定资源计数
+	// 析构函数
 	~Semaphore() = default;
 
 	// 获取一个信号量资源
@@ -89,17 +92,19 @@ public:
 		resLimit_++;
 		cond_.notify_all();
 	}
+	// 可以在不同线程中获取资源或增加资源，这是与互斥锁的最本质区别
 private:
-	int resLimit_;
+	int resLimit_; // 资源计数，因为信号量可看作是资源计数无限制的互斥锁
 	std::mutex mtx_;
 	std::condition_variable cond_;
+	// 互斥锁与条件变量都是类类型，注意不是模板类
 };
 
 // Task类型的前置声明
 class Task;
 
 // 实现接收提交到线程池的task任务执行完成后的返回值类型Result
-// 主线程提交任务并且接收返回值，具体消费任务时由其他线程执行，所以需要线程间的通信
+// 用户线程提交任务并且接收返回值，具体消费任务时由其他线程执行，所以需要线程间的通信
 class Result
 {
 public:
@@ -110,7 +115,7 @@ public:
 	void setVal(Any any);
 	
 	// 问题二：成员函数get()：用户调用这个方法获取task的返回值(Any类型的对象)
-	Any get();
+	Any get(); // 当用户调用到这个成员函数，但是线程任务还没有执行完毕时需要阻塞用户线程，所以需要用到信号量
 
 private:
 	Any any_; // 存储任务的返回值
@@ -129,12 +134,12 @@ public:
 	void exec();
 	void setResult(Result* res);
 
-	// 用户可以自定义任意任务类型，从Task继承而来，重写run()方法，实现自定义任务处理
+	// 用户可以自定义任务类型，从Task继承而来，重写run()方法，实现自定义任务处理
 	virtual Any run() = 0;
 
 private:
 	Result* result_; // Result对象的声明周期是要长于Task的
-	// 这里必须使用裸指针，不能使用智能指针
+	// 委托设计思想：这里必须使用裸指针，不能使用智能指针
 };
 
 // 线程池支持的两种模式
