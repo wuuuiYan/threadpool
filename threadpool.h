@@ -114,7 +114,7 @@ public:
 	// 问题一：成员函数setVal()：获取任务执行完的返回值
 	void setVal(Any any);
 	
-	// 问题二：成员函数get()：用户调用这个方法获取task的返回值(Any类型的对象)
+	// 问题二：成员函数get()：用户调用该方法获取task的返回值(Any类型的对象)
 	Any get(); // 当用户调用到这个成员函数，但是线程任务还没有执行完毕时需要阻塞用户线程，所以需要用到信号量
 
 private:
@@ -125,7 +125,7 @@ private:
 };
 
 // 任务抽象基类，含有纯虚函数的类是抽象基类
-// 不能定义抽象基类的对象，但是可以定义抽象基类类型的指针，进而指向派生类的对象
+// 不能定义抽象基类的对象，但是可以定义抽象基类类型的指针(任务队列)，进而指向派生类的对象
 class Task
 {
 public:
@@ -138,8 +138,8 @@ public:
 	virtual Any run() = 0;
 
 private:
-	Result* result_; // Result对象的声明周期是要长于Task的
-	// 委托设计思想：这里必须使用裸指针，不能使用智能指针
+	Result* result_; // Result对象的声明周期是要长于Task对象的
+	// 委托设计思想：这里必须使用裸指针，不能使用智能指针，否则会发生交叉/循环引用问题
 };
 
 // 线程池支持的两种模式
@@ -229,10 +229,10 @@ private:
 
 	// std::vector<std::unique_ptr<Thread>> threads_; // 存放线程的容器，无需考虑线程安全问题
 	std::unordered_map<int, std::unique_ptr<Thread>> threads_; // 存放线程对象的容器，同时建立了线程对象与线程ID之间的关联
-	size_t initThreadSize_; // 初始线程数量
+	size_t initThreadSize_; // 初始线程数量，Fixed模式使用
 	std::atomic_int curThreadSize_; // 当前线程容器中的线程数量
 	// threads_.size()也能表示当前线程容器中的线程数量，但因为vector不是线程安全的，所以考虑另外设置一个原子类型的变量
-	int threadSizeThresHold_; // 线程容器中能存储的最大线程数量，因为不会修改，所以不限定原子操作
+	int threadSizeThresHold_; // 线程容器中能存储的最大线程数量，因为不会修改，所以不限定原子操作。原因是线程不能无限创建
 	std::atomic_int idleThreadSize_; // 当前空闲线程的数量
 
 	std::queue<std::shared_ptr<Task>> taskQue_; // 存放任务的队列，需要考虑线程安全问题
@@ -249,6 +249,7 @@ private:
 
 	PoolMode poolMode_; // 当前线程池的工作模式，使用枚举类型定义
 	std::atomic_bool isPoolRunning_; // 表示当前线程池的工作状态，因为在多个线程中都要用到，所以需要考虑线程安全问题
+	// 一旦线程池启动之后，不能再更改其内部参数：Fixed/Cached、threadSizeThresHold_、threadSizeThresHold_
 };
 
 #endif

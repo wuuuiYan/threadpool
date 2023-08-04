@@ -15,6 +15,7 @@ using namespace std;
 
 using uLong = unsigned long long;
 
+// 甚至可以定义不同的派生类用于执行不同的任务
 class MyTask : public Task
 {
 public:
@@ -70,7 +71,6 @@ int main()
 		pool.setMode(PoolMode::MODE_CACHED); // 用户自定义线程池的工作模式
 		pool.start(4); //启动线程池
 
-
 		// 如何设计这里的Result机制？要求：当线程函数没有执行完毕时，调用成员函数get()会发生阻塞
 		Result res1 = pool.submitTask(std::make_shared<MyTask>(1, 100000000));
 		Result res2 = pool.submitTask(std::make_shared<MyTask>(100000001, 200000000));
@@ -81,12 +81,12 @@ int main()
 		pool.submitTask(std::make_shared<MyTask>(200000001, 300000000));
 
 		// 随着任务执行完毕，task对象被销毁，依赖于task对象的Result对象也被销毁
-		uLong sum1 = res1.get().cast_<uLong>(); //get返回了一个Any类型，怎么转成具体的类型？
+		uLong sum1 = res1.get().cast_<uLong>(); // get返回了一个Any类型，怎么转成具体的类型？
 		uLong sum2 = res2.get().cast_<uLong>();
 		uLong sum3 = res3.get().cast_<uLong>();
 
-		// Master -> Slaver线程模型：1）Master用来分解任务，然后给各个Slaver线程分配任务
-		// 2）等待各个Slaver线程执行完任务，返回结果；3）Master线程合并各个任务结果，输出显示
+		// Master -> Slave线程模型：1）Master用来分解任务，然后给各个Slaver程分配任务
+		// 2）等待各个Slave线程执行完任务，返回结果；3）Master线程合并各个任务结果，输出显示
 		std::cout << (sum1 + sum2 + sum3) << std::endl;
 	}
 
