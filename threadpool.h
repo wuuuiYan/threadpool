@@ -25,19 +25,20 @@ public:
 	Any& operator=(Any&&) = default; // 移动赋值运算符
 
 	// 只接受一个参数的构造函数是转换构造函数
-	// 转换构造函数使用函数模板，可以接收任意类型而构造Any类对象
+	// 转换构造函数使用函数模板，可以接收任意类型进而构造Any类对象
 	template<typename T>
 	Any(T data) : base_(std::make_unique<Derive<T>>(data)) {}
-	// 基类指针指向派生类的对象
+	// 使用成员初始化列表初始化成员变量，基类指针指向派生类的对象
+	// 非模板类中可以出现构造函数/普通成员函数模板
 
 	// 这个方法能够把Any对象里面存储的data数据提取出来
 	template<typename T>
 	T cast_()
 	{
 		// 从成员变量base_找到指向的Derive对象，从该对象中再取出它的成员变量data_
-		// 基类指针 -> 派生类指针(RTTI)：当基类的指针确实指向派生类的对象时才可以转换成功，转换失败时返回nullptr
+		// 基类指针 -> 派生类指针(运行时类型识别RTTI)：当基类的指针确实指向派生类的对象时才可以转换成功，转换失败时返回nullptr
 		Derive<T> *pd = dynamic_cast<Derive<T>*>(base_.get()); // 成员函数get()获取智能指针所指向对象的裸指针
-		if (pd == nullptr)
+		if (pd == nullptr) // 上面转换失败时返回nullptr，所以判断条件这样写
 		{
 			// 类型不匹配会转换失败
 			throw "type is unmatch!";
@@ -89,7 +90,7 @@ public:
 			return;
 		std::unique_lock<std::mutex> lock(mtx_);
 		// 等待信号量有资源，没有资源的话会阻塞当前线程
-		cond_.wait(lock, [&]()->bool {return resLimit_ > 0; });
+		cond_.wait(lock, [&]() ->bool { return resLimit_ > 0; });
 		resLimit_--;
 	}
 
@@ -106,7 +107,7 @@ public:
 	}
 	// 可以在不同线程中获取资源或增加资源，这是与互斥锁的最本质区别
 private:
-	std::atomic_bool isExit_;
+	std::atomic_bool isExit_; // 表示资源是否还存在的标志位
 	int resLimit_; // 资源计数，因为信号量可看作是资源计数无限制的互斥锁
 	std::mutex mtx_;
 	std::condition_variable cond_;
@@ -135,6 +136,7 @@ private:
 	Semaphore sem_; // 线程通信信号量
 	std::shared_ptr<Task> task_; // 指向对应获取返回值的任务对象
 	std::atomic_bool isValid_; // 表示任务提交是否成功，只有当任务提交成功时才可以接收返回值
+	// 当任务提交失败时，即使用户想要获取返回值，也不会阻塞主线程
 };
 
 // 任务抽象基类，含有纯虚函数的类是抽象基类
